@@ -1,0 +1,9 @@
+out/
+data/
+*.db
+
+*.class
+*.jar
+.classpath
+.project
+.settings/

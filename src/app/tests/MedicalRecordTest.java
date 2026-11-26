@@ -1,10 +1,8 @@
 package app.tests;
 
-import app.domain.*;
+import app.domain.DomainException;
+import app.domain.MedicalRecord;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.LocalTime;
-import java.util.UUID;
 
 import static app.tests.TestSupport.*;
 
@@ -13,39 +11,61 @@ public class MedicalRecordTest {
         TestSupport suite = new TestSupport();
         System.out.println("=== Running MedicalRecord Unit Tests ===\n");
 
-        suite.runTest("Create MedicalRecord validates required fields and trims strings", () -> {
-            MedicalRecord rec = new MedicalRecord(
-                UUID.randomUUID(), UUID.randomUUID(), LocalDateTime.now(), "  High fever  ", "  Viral infection  "
-            );
-            assertTrue(rec.getId() != null, "ID generated");
-            assertEquals("High fever", rec.getSymptoms(), "Symptoms trimmed");
-            assertEquals("Viral infection", rec.getDiagnosis(), "Diagnosis trimmed");
+        suite.runTest("New MedicalRecord generates 8-char ID and trims fields", () -> {
+            LocalDate date = LocalDate.of(2026, 11, 26);
+            MedicalRecord record = new MedicalRecord("  APT-1  ", "  DOC-1  ", "  PAT-1  ", date, "  Fever, cough  ", "  Flu  ");
 
-            assertThrows(IllegalArgumentException.class, () ->
-                new MedicalRecord(UUID.randomUUID(), UUID.randomUUID(), LocalDateTime.now(), "  ", "Diagnosis")
-            );
-            assertThrows(IllegalArgumentException.class, () ->
-                new MedicalRecord(UUID.randomUUID(), UUID.randomUUID(), LocalDateTime.now(), "Symptoms", null)
-            );
+            assertTrue(record.getId() != null && record.getId().length() == 8, "8-char ID generated");
+            assertEquals("APT-1", record.getAppointmentId(), "Appointment ID trimmed");
+            assertEquals("DOC-1", record.getDoctorId(), "Doctor ID trimmed");
+            assertEquals("PAT-1", record.getPatientId(), "Patient ID trimmed");
+            assertEquals(date, record.getVisitDate(), "Visit date preserved");
+            assertEquals("Fever, cough", record.getSymptoms(), "Symptoms trimmed");
+            assertEquals("Flu", record.getDiagnosis(), "Diagnosis trimmed");
         });
 
-        suite.runTest("Only the owning Doctor can update consultation details", () -> {
-            UUID ownerDoctorId = UUID.randomUUID();
-            UUID otherDoctorId = UUID.randomUUID();
-            MedicalRecord rec = new MedicalRecord(UUID.randomUUID(), ownerDoctorId, LocalDateTime.now().minusDays(1), "Cough", "Bronchitis");
+        suite.runTest("Load existing MedicalRecord preserves ID and fields", () -> {
+            LocalDate date = LocalDate.of(2026, 10, 15);
+            MedicalRecord record = new MedicalRecord("REC-101", "APT-1", "DOC-1", "PAT-1", date, "Headache", "Migraine");
 
-            // Another doctor cannot edit
-            assertThrows(SecurityException.class, () ->
-                rec.updateConsultation(otherDoctorId, "Updated", "Updated", LocalDateTime.now())
-            );
-            assertEquals("Cough", rec.getSymptoms(), "Symptoms must not change on unauthorized edit");
+            assertEquals("REC-101", record.getId(), "Loaded ID preserved");
+            assertEquals("Headache", record.getSymptoms(), "Symptoms preserved");
+            assertEquals("Migraine", record.getDiagnosis(), "Diagnosis preserved");
+            assertEquals(date, record.getVisitDate(), "Visit date preserved");
+        });
 
-            // Owning doctor can edit
-            LocalDateTime updatedVisit = LocalDateTime.now();
-            rec.updateConsultation(ownerDoctorId, "  Mild cough  ", "  Recovered  ", updatedVisit);
-            assertEquals("Mild cough", rec.getSymptoms(), "Symptoms updated");
-            assertEquals("Recovered", rec.getDiagnosis(), "Diagnosis updated");
-            assertEquals(updatedVisit, rec.getVisitDate(), "Visit date updated");
+        suite.runTest("Reject null or blank required fields with DomainException", () -> {
+            LocalDate date = LocalDate.now();
+            assertThrows(DomainException.class, () -> new MedicalRecord("  ", "APT-1", "DOC-1", "PAT-1", date, "Symptoms", "Diagnosis"));
+            assertThrows(DomainException.class, () -> new MedicalRecord("  ", "DOC-1", "PAT-1", date, "Symptoms", "Diagnosis"));
+            assertThrows(DomainException.class, () -> new MedicalRecord("APT-1", null, "PAT-1", date, "Symptoms", "Diagnosis"));
+            assertThrows(DomainException.class, () -> new MedicalRecord("APT-1", "DOC-1", "   ", date, "Symptoms", "Diagnosis"));
+            assertThrows(DomainException.class, () -> new MedicalRecord("APT-1", "DOC-1", "PAT-1", null, "Symptoms", "Diagnosis"));
+            assertThrows(DomainException.class, () -> new MedicalRecord("APT-1", "DOC-1", "PAT-1", date, "", "Diagnosis"));
+            assertThrows(DomainException.class, () -> new MedicalRecord("APT-1", "DOC-1", "PAT-1", date, "Symptoms", null));
+        });
+
+        suite.runTest("Update consultation details updates fields and validates inputs", () -> {
+            LocalDate oldDate = LocalDate.of(2026, 11, 1);
+            LocalDate newDate = LocalDate.of(2026, 11, 26);
+            MedicalRecord record = new MedicalRecord("REC-101", "APT-1", "DOC-1", "PAT-1", oldDate, "Old Symptoms", "Old Diagnosis");
+
+            assertThrows(DomainException.class, () -> record.updateConsultationDetails("   ", "New Diagnosis", newDate));
+            assertThrows(DomainException.class, () -> record.updateConsultationDetails("New Symptoms", null, newDate));
+            assertThrows(DomainException.class, () -> record.updateConsultationDetails("New Symptoms", "New Diagnosis", null));
+
+            record.updateConsultationDetails("  Updated Symptoms  ", "  Updated Diagnosis  ", newDate);
+            assertEquals("Updated Symptoms", record.getSymptoms(), "Symptoms updated and trimmed");
+            assertEquals("Updated Diagnosis", record.getDiagnosis(), "Diagnosis updated and trimmed");
+            assertEquals(newDate, record.getVisitDate(), "Visit date updated");
+        });
+
+        suite.runTest("toString formats medical record details properly", () -> {
+            LocalDate date = LocalDate.of(2026, 11, 26);
+            MedicalRecord record = new MedicalRecord("REC-101", "APT-1", "DOC-1", "PAT-1", date, "Fever", "Cold");
+
+            String expected = "[REC-101] Date: 2026-11-26 | Patient: PAT-1 | Doctor: DOC-1 | Symptoms: Fever | Diagnosis: Cold";
+            assertEquals(expected, record.toString(), "toString format mismatch");
         });
 
         suite.printSummary("MedicalRecordTest");

@@ -1,19 +1,15 @@
 package app.tests;
 
+import app.domain.DomainException;
 import app.domain.Role;
 import app.domain.User;
 import java.util.Objects;
-import java.util.UUID;
 
 public class UserTest {
 
     private static class TestUser extends User {
-        public TestUser(String username, String name, String phone, String passwordHash, Role role) {
-            super(username, name, phone, passwordHash, role);
-        }
-
-        public TestUser(UUID id, String username, String name, String phone, String passwordHash, Role role) {
-            super(id, username, name, phone, passwordHash, role);
+        public TestUser(String id, String name, String phone, String password, Role role) {
+            super(id, name, phone, password, role);
         }
     }
 
@@ -21,16 +17,15 @@ public class UserTest {
     private static int failed = 0;
 
     public static void main(String[] args) {
-        System.out.println("=== Running Simplified User Entity Tests ===\n");
+        System.out.println("=== Running User Entity Tests ===\n");
 
-        testCreateNewUser();
-        testLoadExistingUser();
-        testRejectNullIdAndRole();
-        testRejectBlankFields();
+        testCreateUser();
+        testOptionalPhone();
+        testRejectNullRole();
+        testRejectBlankRequiredFields();
         testUpdateProfile();
         testUpdateProfileAtomicFailure();
-        testChangePassword();
-        testIdentityEquality();
+        testCheckPassword();
 
         System.out.println("\n=== Summary: " + passed + " passed, " + failed + " failed ===");
         if (failed > 0) System.exit(1);
@@ -38,98 +33,82 @@ public class UserTest {
 
     // --- Test Cases ---
 
-    private static void testCreateNewUser() {
-        runTest("Create new user generates UUID and trims/normalizes fields", () -> {
-            User user = new TestUser("  AdminUser  ", "  John Doe  ", "  01012345678  ", "hash123", Role.ADMIN);
+    private static void testCreateUser() {
+        runTest("Create user stores and trims fields properly", () -> {
+            User user = new TestUser("  U-101  ", "  John Doe  ", "  01012345678  ", "pass123", Role.ADMIN);
 
-            assertTrue(user.getId() != null, "ID should be generated");
-            assertEquals("adminuser", user.getUsername(), "Username should be lowercased & trimmed");
+            assertEquals("U-101", user.getId(), "ID should be trimmed");
             assertEquals("John Doe", user.getName(), "Name should be trimmed");
             assertEquals("01012345678", user.getPhone(), "Phone should be trimmed");
-            assertEquals("hash123", user.getPasswordHash(), "Password hash mismatch");
+            assertEquals("pass123", user.getPassword(), "Password mismatch");
             assertEquals(Role.ADMIN, user.getRole(), "Role mismatch");
         });
     }
 
-    private static void testLoadExistingUser() {
-        runTest("Load existing user keeps provided UUID", () -> {
-            UUID id = UUID.randomUUID();
-            User user = new TestUser(id, "dr.sara", "Sara Ali", "01198765432", "bcrypt_hash", Role.DOCTOR);
+    private static void testOptionalPhone() {
+        runTest("Optional phone normalizes null or blank values to null", () -> {
+            User u1 = new TestUser("U-101", "John Doe", null, "pass123", Role.PATIENT);
+            User u2 = new TestUser("U-102", "Jane Doe", "   ", "pass123", Role.PATIENT);
 
-            assertEquals(id, user.getId(), "Existing ID should be preserved");
-            assertEquals("dr.sara", user.getUsername(), "Username mismatch");
+            assertEquals(null, u1.getPhone(), "Null phone should stay null");
+            assertEquals(null, u2.getPhone(), "Blank phone should normalize to null");
         });
     }
 
-    private static void testRejectNullIdAndRole() {
-        runTest("Reject null ID or null Role with NullPointerException", () -> {
-            assertThrows(NullPointerException.class, () ->
-                new TestUser(null, "user1", "Name", "0100000", "hash", Role.PATIENT)
-            );
-            assertThrows(NullPointerException.class, () ->
-                new TestUser("user1", "Name", "0100000", "hash", null)
+    private static void testRejectNullRole() {
+        runTest("Reject null Role with DomainException", () -> {
+            assertThrows(DomainException.class, () ->
+                new TestUser("U-101", "Name", "0100000", "pass", null)
             );
         });
     }
 
-    private static void testRejectBlankFields() {
-        runTest("Reject null or blank username, name, phone, and passwordHash", () -> {
+    private static void testRejectBlankRequiredFields() {
+        runTest("Reject null or blank id, name, and password with DomainException", () -> {
             String[] badInputs = {null, "", "   ", "\t\n"};
             for (String bad : badInputs) {
-                assertThrows(IllegalArgumentException.class, () -> new TestUser(bad, "Name", "010", "hash", Role.PATIENT));
-                assertThrows(IllegalArgumentException.class, () -> new TestUser("user", bad, "010", "hash", Role.PATIENT));
-                assertThrows(IllegalArgumentException.class, () -> new TestUser("user", "Name", bad, "hash", Role.PATIENT));
-                assertThrows(IllegalArgumentException.class, () -> new TestUser("user", "Name", "010", bad, Role.PATIENT));
+                assertThrows(DomainException.class, () -> new TestUser(bad, "Name", "010", "pass", Role.PATIENT));
+                assertThrows(DomainException.class, () -> new TestUser("U-101", bad, "010", "pass", Role.PATIENT));
+                assertThrows(DomainException.class, () -> new TestUser("U-101", "Name", "010", bad, Role.PATIENT));
             }
         });
     }
 
     private static void testUpdateProfile() {
-        runTest("Update profile updates and trims name and phone", () -> {
-            User user = new TestUser("user1", "Old Name", "0101111", "hash1", Role.PATIENT);
-            user.updateProfile("  New Name  ", "  0122222  ");
+        runTest("Update profile updates name, optional phone, and password", () -> {
+            User user = new TestUser("U-101", "Old Name", "0101111", "old_pass", Role.PATIENT);
+            user.updateProfile("  New Name  ", "  0122222  ", "new_pass");
 
             assertEquals("New Name", user.getName(), "Name should be updated");
             assertEquals("0122222", user.getPhone(), "Phone should be updated");
-            assertEquals("hash1", user.getPasswordHash(), "Password hash should not change");
+            assertEquals("new_pass", user.getPassword(), "Password should be updated");
+
+            // Clearing optional phone
+            user.updateProfile("New Name", "   ", "new_pass");
+            assertEquals(null, user.getPhone(), "Blank phone on update should normalize to null");
         });
     }
 
     private static void testUpdateProfileAtomicFailure() {
-        runTest("Update profile fails atomically if either field is blank", () -> {
-            User user = new TestUser("user1", "Original Name", "0101111", "hash1", Role.PATIENT);
+        runTest("Update profile fails atomically with DomainException if name or password is blank", () -> {
+            User user = new TestUser("U-101", "Original Name", "0101111", "orig_pass", Role.PATIENT);
 
-            assertThrows(IllegalArgumentException.class, () -> user.updateProfile("   ", "0122222"));
-            assertThrows(IllegalArgumentException.class, () -> user.updateProfile("Valid Name", null));
+            assertThrows(DomainException.class, () -> user.updateProfile("   ", "0122222", "new_pass"));
+            assertThrows(DomainException.class, () -> user.updateProfile("Valid Name", "0122222", null));
 
             assertEquals("Original Name", user.getName(), "Name must remain unchanged on failure");
             assertEquals("0101111", user.getPhone(), "Phone must remain unchanged on failure");
+            assertEquals("orig_pass", user.getPassword(), "Password must remain unchanged on failure");
         });
     }
 
-    private static void testChangePassword() {
-        runTest("Change password updates passwordHash and rejects blank values", () -> {
-            User user = new TestUser("user1", "Name", "0101111", "old_hash", Role.DOCTOR);
-            user.changePassword("  new_hash  ");
-            assertEquals("new_hash", user.getPasswordHash(), "Password hash should update");
+    private static void testCheckPassword() {
+        runTest("checkPassword returns true only for exact password match", () -> {
+            User user = new TestUser("U-101", "Name", "0101111", "secret123", Role.DOCTOR);
 
-            assertThrows(IllegalArgumentException.class, () -> user.changePassword("  "));
-            assertEquals("new_hash", user.getPasswordHash(), "Password hash must remain unchanged on failure");
-        });
-    }
-
-    private static void testIdentityEquality() {
-        runTest("Users with same UUID are equal; different UUIDs or null/other types are not", () -> {
-            UUID sharedId = UUID.randomUUID();
-            User u1 = new TestUser(sharedId, "user1", "Name 1", "0101", "hash1", Role.ADMIN);
-            User u2 = new TestUser(sharedId, "user2", "Name 2", "0102", "hash2", Role.ADMIN);
-            User u3 = new TestUser(UUID.randomUUID(), "user1", "Name 1", "0101", "hash1", Role.ADMIN);
-
-            assertTrue(u1.equals(u2), "Same UUID should be equal");
-            assertEquals(u1.hashCode(), u2.hashCode(), "Same UUID should have same hashCode");
-            assertTrue(!u1.equals(u3), "Different UUID should not be equal");
-            assertTrue(!u1.equals(null), "Should not equal null");
-            assertTrue(!u1.equals("string"), "Should not equal unrelated object");
+            assertTrue(user.checkPassword("secret123"), "Exact password should match");
+            assertTrue(!user.checkPassword("wrong"), "Wrong password should not match");
+            assertTrue(!user.checkPassword(null), "Null password should not match");
         });
     }
 
